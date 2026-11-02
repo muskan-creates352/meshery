@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -766,4 +767,78 @@ func TestSubcommandNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteConfiguration(t *testing.T) {
+	_ = SetupMeshkitLoggerTesting(t, false)
+
+	oldToken := TokenFlag
+	TokenFlag = GetToken(t)
+	t.Cleanup(func() { TokenFlag = oldToken })
+
+	t.Run("success on 200 OK and closes response body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete {
+				t.Errorf("expected DELETE method, got %s", r.Method)
+			}
+			if r.URL.Path != "/api/filter/test-id-123" {
+				t.Errorf("expected path /api/filter/test-id-123, got %s", r.URL.Path)
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		transport := &trackingTransport{base: http.DefaultTransport}
+		previousTransport := http.DefaultTransport
+		http.DefaultTransport = transport
+		t.Cleanup(func() { http.DefaultTransport = previousTransport })
+
+		err := DeleteConfiguration(server.URL, "test-id-123", "filter")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if transport.body == nil || !transport.body.closed {
+			t.Fatal("expected response body to be closed on 200 OK")
+		}
+	})
+
+	t.Run("success on 204 No Content and closes response body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		transport := &trackingTransport{base: http.DefaultTransport}
+		previousTransport := http.DefaultTransport
+		http.DefaultTransport = transport
+		t.Cleanup(func() { http.DefaultTransport = previousTransport })
+
+		err := DeleteConfiguration(server.URL, "test-id-123", "filter")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if transport.body == nil || !transport.body.closed {
+			t.Fatal("expected response body to be closed on 204 No Content")
+		}
+	})
+
+	t.Run("returns ErrResponseStatus on non-200 and closes response body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		transport := &trackingTransport{base: http.DefaultTransport}
+		previousTransport := http.DefaultTransport
+		http.DefaultTransport = transport
+		t.Cleanup(func() { http.DefaultTransport = previousTransport })
+
+		err := DeleteConfiguration(server.URL, "non-existent-id", "filter")
+		if err == nil {
+			t.Fatal("expected error on 404 Not Found, got nil")
+		}
+		if transport.body == nil || !transport.body.closed {
+			t.Fatal("expected response body to be closed on 404 Not Found")
+		}
+	})
 }

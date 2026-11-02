@@ -355,6 +355,11 @@ func GetProviderInfo(mctCfg *config.MesheryCtlConfig) (map[string]Provider, erro
 	if err != nil {
 		return nil, err
 	}
+	defer SafeClose(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, ErrResponseStatus(resp.StatusCode)
+	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err

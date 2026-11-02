@@ -169,3 +169,106 @@ func TestMakeRequest_Status302AndHTMLResponseHandling(t *testing.T) {
 		}
 	})
 }
+
+func TestGetProviderInfo(t *testing.T) {
+	_ = SetupMeshkitLoggerTesting(t, false)
+
+	t.Run("success returns provider map and closes response body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/providers" {
+				t.Errorf("expected path /api/providers, got %s", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"Meshery": {"providerUrl": "https://meshery.io", "providerName": "Meshery"}}`))
+		}))
+		defer server.Close()
+
+		transport := &trackingTransport{base: http.DefaultTransport}
+		previousTransport := http.DefaultTransport
+		http.DefaultTransport = transport
+		t.Cleanup(func() { http.DefaultTransport = previousTransport })
+
+		cfg := &config.MesheryCtlConfig{
+			CurrentContext: "default",
+			Contexts: map[string]config.Context{
+				"default": {
+					Endpoint: server.URL,
+				},
+			},
+		}
+
+		providers, err := GetProviderInfo(cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(providers) != 1 || providers["Meshery"].ProviderName != "Meshery" {
+			t.Errorf("unexpected providers map: %+v", providers)
+		}
+		if transport.body == nil || !transport.body.closed {
+			t.Fatal("expected response body to be closed on success")
+		}
+	})
+
+	t.Run("returns ErrResponseStatus on non-200 status code and closes response body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		transport := &trackingTransport{base: http.DefaultTransport}
+		previousTransport := http.DefaultTransport
+		http.DefaultTransport = transport
+		t.Cleanup(func() { http.DefaultTransport = previousTransport })
+
+		cfg := &config.MesheryCtlConfig{
+			CurrentContext: "default",
+			Contexts: map[string]config.Context{
+				"default": {
+					Endpoint: server.URL,
+				},
+			},
+		}
+
+		providers, err := GetProviderInfo(cfg)
+		if err == nil {
+			t.Fatal("expected error on 500 status code, got nil")
+		}
+		if providers != nil {
+			t.Errorf("expected nil providers, got %+v", providers)
+		}
+		if transport.body == nil || !transport.body.closed {
+			t.Fatal("expected response body to be closed on non-200 response")
+		}
+	})
+
+	t.Run("returns decode error on invalid JSON and closes response body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`invalid-json`))
+		}))
+		defer server.Close()
+
+		transport := &trackingTransport{base: http.DefaultTransport}
+		previousTransport := http.DefaultTransport
+		http.DefaultTransport = transport
+		t.Cleanup(func() { http.DefaultTransport = previousTransport })
+
+		cfg := &config.MesheryCtlConfig{
+			CurrentContext: "default",
+			Contexts: map[string]config.Context{
+				"default": {
+					Endpoint: server.URL,
+				},
+			},
+		}
+
+		_, err := GetProviderInfo(cfg)
+		if err == nil {
+			t.Fatal("expected decode error on invalid JSON, got nil")
+		}
+		if transport.body == nil || !transport.body.closed {
+			t.Fatal("expected response body to be closed on decode error")
+		}
+	})
+}
